@@ -24,19 +24,6 @@ interface ReaderScreenProps {
 
 export type PaperThemeKey = 'white' | 'sepia' | 'green' | 'dark' | 'black';
 
-/** Tipe elemen konten buku digital agar setiap jenis teks terformat sempurna */
-export type PageContentElement =
-  | { type: 'heading'; text: string }
-  | {
-      type: 'toc-item';
-      title: string;
-      pageNumber: string;
-      level: number;
-    }
-  | { type: 'list-item'; marker: string; text: string }
-  | { type: 'paragraph'; text: string }
-  | { type: 'image'; uri: string };
-
 /** Model satu lembaran halaman buku digital */
 export interface EbookPage {
   pageNumber: number; // 1 to totalPages
@@ -89,110 +76,30 @@ async function ensurePdfJs(): Promise<any> {
 }
 
 /**
- * Pembersih cerdas dan perapih tata letak teks PDF:
- * Mengidentifikasi apakah halaman ini adalah Daftar Isi bertitik-titik, daftar poin bernomor,
- * atau paragraf prosa biasa, lalu merapikannya secara visual seperti buku cetak profesional.
-/**
- * Memeriksa apakah suatu baris teks adalah nomor halaman fisik buku cetak
- * (angka murni, angka berpagar strip/kurung/titik/bullet, angka romawi, atau prefix "halaman/hal/hlm/page")
+ * Pembersih dan perapih teks hasil ekstraksi halaman PDF
  */
-function isStandalonePageNumber(text: string): boolean {
-  if (!text) return false;
-  const t = text.trim();
-  if (t.length === 0) return false;
-
-  // 1. Murni angka 1-4 digit (misal: "29", "1", "240")
-  if (/^\d{1,4}$/.test(t)) return true;
-
-  // 2. Angka terkurung tanda strip, kurung, titik, tilde, atau bullet (misal: "- 29 -", "— 29 —", "[29]", "(29)", "• 29 •", "29.", "— 29", "29 —")
-  if (/^[-–—~•·\(\[\{/|*\s]*\d{1,4}[-–—~•·\)\]\}/|*\s]*$/.test(t)) return true;
-
-  // 3. Angka romawi kecil atau kapital terisolasi (misal: "i", "iv", "ix", "xii", "- iv -", "(xiv)")
-  if (/^[-–—~•·\(\[\{/|*\s]*[ivxlcdm]{1,8}[-–—~•·\)\]\}/|*\s]*$/i.test(t)) return true;
-
-  // 4. Prefix eksplisit halaman (misal: "Hal. 29", "Halaman 29", "hlm 29", "Page 29", "hal 29/80")
-  if (/^(?:halaman|hal|hlm|page|pg)[\s\.\:\-–—]*\d{1,4}(?:\s*[\/|]\s*\d{1,4})?$/i.test(t)) return true;
-
-  // 5. Format X dari Y atau X / Y terisolasi (misal: "29 / 83", "29 dari 83", "29 of 83")
-  if (/^\d{1,4}\s*(?:dari|of|\/|\|)\s*\d{1,4}$/i.test(t)) return true;
-
-  return false;
-}
-
-/**
- * Membersihkan nomor halaman yang menempel pada running header / footer buku cetak.
- * Contoh: "29 | Pengantar Ilmu Hukum" -> "Pengantar Ilmu Hukum"
- * Atau: "BAB III Sumber-Sumber Hukum 29" -> "BAB III Sumber-Sumber Hukum"
- */
-function stripPageNumberFromHeaderOrFooter(line: string): string {
-  let cleaned = line.trim();
-  // Pola: "29 | Judul" atau "[29] Judul" atau "29 - Judul"
-  cleaned = cleaned.replace(/^[-–—~•·\(\[\{]*\d{1,4}[-–—~•·\)\]\}]*\s*[-–—|•·/:]*\s*/i, '');
-  // Pola: "Judul | 29" atau "Judul - [29]"
-  cleaned = cleaned.replace(/\s*[-–—|•·/:]*\s*[-–—~•·\(\[\{]*\d{1,4}[-–—~•·\)\]\}]*$/i, '');
-  // Pola jika ada 2 spasi atau lebih sebelum/sesudah nomor halaman:
-  cleaned = cleaned.replace(/^\d{1,4}\s{2,}/, '');
-  cleaned = cleaned.replace(/\s{2,}\d{1,4}$/, '');
-  return cleaned.trim();
-}
-
-/**
- * Pembersih cerdas dan perapih tata letak teks PDF:
- * Mengidentifikasi apakah halaman ini adalah Daftar Isi bertitik-titik, daftar poin bernomor,
- * atau paragraf prosa biasa, lalu merapikannya secara visual seperti buku cetak profesional.
- * Menghapus nomor halaman fisik buku asli agar lembaran baca e-reader bersih tanpa angka yang mengganggu.
- */
-function cleanAndFormatPdfLines(rawLines: string[], bookTitle?: string): {
+function cleanAndFormatPdfLines(rawLines: string[]): {
   detectedChapterTitle?: string;
   isRealChapterOpening: boolean;
-  elements: PageContentElement[];
+  paragraphs: string[];
 } {
   if (!rawLines || rawLines.length === 0) {
-    return { isRealChapterOpening: false, elements: [] };
+    return { isRealChapterOpening: false, paragraphs: [] };
   }
 
-  // 1. Bersihkan spasi ganda horizontal pada teks PDF
   const cleanLines = rawLines
-    .map((l) => l.replace(/[ \t]{2,}/g, ' ').trim())
+    .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
   let detectedChapterTitle: string | undefined;
   let isRealChapterOpening = false;
   const filteredLines: string[] = [];
 
-  const normalizedBookTitle = bookTitle
-    ? bookTitle.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
-    : '';
-
   for (let i = 0; i < cleanLines.length; i++) {
-    let line = cleanLines[i];
-
-    // HAPUS TOTAL nomor halaman fisik cetak di posisi baris mana pun!
-    if (isStandalonePageNumber(line)) {
-      continue;
-    }
-
-    // Untuk baris di header (i < 3) atau footer (i >= cleanLines.length - 2),
-    // bersihkan kemungkinan nomor halaman yang menempel di running header/footer
-    if (i < 3 || i >= cleanLines.length - 2) {
-      const stripped = stripPageNumberFromHeaderOrFooter(line);
-      if (isStandalonePageNumber(stripped) || stripped.length === 0) {
-        continue;
-      }
-      line = stripped;
-
-      // Jika baris ini adalah running header yang mengulang persis judul buku, abaikan
-      if (normalizedBookTitle && line.length < 50) {
-        const normLine = line.toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (normLine && (normLine === normalizedBookTitle || normalizedBookTitle.includes(normLine))) {
-          if (i === 0 && cleanLines.length > 3) {
-            continue;
-          }
-        }
-      }
-    }
+    const line = cleanLines[i];
 
     // Deteksi judul bab HANYA jika benar-benar merupakan judul pembuka bab baru
+    // (Misal: "BAB I", "BAB 2", "CHAPTER 37", "KATA PENGANTAR", "DAFTAR ISI")
     if (
       !detectedChapterTitle &&
       i < 2 &&
@@ -206,153 +113,20 @@ function cleanAndFormatPdfLines(rawLines: string[], bookTitle?: string): {
       continue;
     }
 
+    // Abaikan nomor halaman terisolasi di header atau footer (misal angka "1" atau "83" sendirian)
+    if (/^\d{1,4}$/.test(line) && (i === 0 || i === cleanLines.length - 1)) {
+      continue;
+    }
+
     filteredLines.push(line);
   }
 
-  // 2. Deteksi apakah halaman ini adalah HALAMAN DAFTAR ISI (TABLE OF CONTENTS)
-  const isTocPage =
-    Boolean(detectedChapterTitle && /daftar\s+isi|contents/i.test(detectedChapterTitle)) ||
-    filteredLines.filter((l) => /[\.\u2026]{3,}/.test(l)).length >= 2;
-
-  const elements: PageContentElement[] = [];
-
-  // =========================================================================
-  // JIKA HALAMAN DAFTAR ISI: RAPIIKAN SETIAP BARIS DAFTAR ISI SECARA PRESISI
-  // =========================================================================
-  if (isTocPage) {
-    let pendingTitle = '';
-
-    for (let i = 0; i < filteredLines.length; i++) {
-      let line = filteredLines[i];
-
-      // Jika ada judul terpotong dari baris sebelumnya, gabungkan
-      if (pendingTitle) {
-        line = `${pendingTitle} ${line}`;
-        pendingTitle = '';
-      }
-
-      // Pola baris daftar isi: Judul .................... Nomor Halaman (Romawi / Angka)
-      const tocMatch = line.match(
-        /^(.*?)(?:[\s\.\u2026]{2,})\s*([ivxlcdm\d]+)\s*$/i
-      );
-
-      if (tocMatch) {
-        const rawTitle = tocMatch[1].replace(/[\.\u2026]+$/, '').trim();
-        const pageNum = tocMatch[2].trim();
-
-        if (rawTitle.length > 0) {
-          // Tentukan level indentasi berdasarkan awalan judul:
-          let level = 0;
-          if (/^[A-Z]\.\s+/.test(rawTitle)) {
-            level = 1; // Sub-bab: A. B. C.
-          } else if (/^\d+\.\s+/.test(rawTitle)) {
-            level = 2; // Poin materi: 1. 2. 3.
-          } else if (/^[a-z]\.\s+/.test(rawTitle)) {
-            level = 3; // Rincian: a. b. c.
-          } else if (/^(bab|bagian|chapter|kata\s+pengantar|daftar\s+isi)/i.test(rawTitle)) {
-            level = 0; // Bab utama
-          }
-
-          elements.push({
-            type: 'toc-item',
-            title: rawTitle,
-            pageNumber: pageNum,
-            level,
-          });
-          continue;
-        }
-      }
-
-      // Jika baris ini hanya judul pembuka tanpa titik (misal judul panjang yang titiknya di baris berikutnya)
-      if (
-        i < filteredLines.length - 1 &&
-        !/[\.\u2026]{2,}/.test(line) &&
-        /[\.\u2026]{2,}/.test(filteredLines[i + 1])
-      ) {
-        pendingTitle = line;
-        continue;
-      }
-
-      // Jika hanya heading di dalam daftar isi (misal "BAB I")
-      if (line.length < 50 && !/[\.\u2026]{2,}/.test(line)) {
-        elements.push({
-          type: 'heading',
-          text: line,
-        });
-        continue;
-      }
-
-      // Fallback jika ada baris pengantar biasa
-      elements.push({
-        type: 'paragraph',
-        text: line,
-      });
-    }
-
-    return {
-      detectedChapterTitle,
-      isRealChapterOpening,
-      elements,
-    };
-  }
-
-  // =========================================================================
-  // JIKA HALAMAN PROSA / MATERI BIASA: SUSUN PARAGRAF & DAFTAR POIN BERSIH
-  // =========================================================================
+  // Gabungkan baris-baris teks menjadi paragraf utuh yang mengalir
+  const paragraphs: string[] = [];
   let currentParagraph = '';
 
   for (let i = 0; i < filteredLines.length; i++) {
     const line = filteredLines[i];
-
-    // Deteksi jika baris ini adalah nomor halaman yang lolos: buang total!
-    if (isStandalonePageNumber(line)) {
-      continue;
-    }
-
-    // Deteksi jika baris ini adalah butir daftar poin (misal: "1. Sumber-Sumber Hukum", "a. Objek")
-    const listMatch = line.match(/^(\d+[\.\)]|[a-zA-Z][\.\)]|[-•*])\s+(.+)$/);
-    if (listMatch && line.length < 90) {
-      if (currentParagraph.trim().length > 0) {
-        elements.push({
-          type: 'paragraph',
-          text: currentParagraph.trim(),
-        });
-        currentParagraph = '';
-      }
-      elements.push({
-        type: 'list-item',
-        marker: listMatch[1],
-        text: listMatch[2].trim(),
-      });
-      continue;
-    }
-
-    // Deteksi sub-judul bab di tengah materi (HARUS memiliki minimal 3 huruf dan bukan angka/nomor halaman)
-    const hasLetters = /[a-zA-Z]/.test(line);
-    const letterCount = line.replace(/[^a-zA-Z]/g, '').length;
-    const isHeading =
-      !isStandalonePageNumber(line) &&
-      hasLetters &&
-      letterCount >= 3 &&
-      line.length >= 4 &&
-      line.length < 65 &&
-      /^[A-Za-z0-9\s:,\.\-–—]+$/.test(line) &&
-      !/[.!?]$/.test(line);
-
-    if (isHeading) {
-      if (currentParagraph.trim().length > 0) {
-        elements.push({
-          type: 'paragraph',
-          text: currentParagraph.trim(),
-        });
-        currentParagraph = '';
-      }
-      elements.push({
-        type: 'heading',
-        text: line,
-      });
-      continue;
-    }
 
     // Tangani tanda hubung pemisah kata di akhir baris (misal: "per-\njalanan" -> "perjalanan")
     if (currentParagraph.endsWith('-')) {
@@ -375,26 +149,20 @@ function cleanAndFormatPdfLines(rawLines: string[], bookTitle?: string): {
       i === filteredLines.length - 1
     ) {
       if (currentParagraph.trim().length > 0) {
-        elements.push({
-          type: 'paragraph',
-          text: currentParagraph.trim(),
-        });
+        paragraphs.push(currentParagraph.trim());
       }
       currentParagraph = '';
     }
   }
 
   if (currentParagraph.trim().length > 0) {
-    elements.push({
-      type: 'paragraph',
-      text: currentParagraph.trim(),
-    });
+    paragraphs.push(currentParagraph.trim());
   }
 
   return {
     detectedChapterTitle,
     isRealChapterOpening,
-    elements,
+    paragraphs,
   };
 }
 
@@ -775,14 +543,14 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
   // Default mode baca: E-Reader Digital Reflowable
   const [readerViewMode, setReaderViewMode] = useState<'ebook' | 'visual'>('ebook');
 
-  // Cache teks dan elemen konten halaman PDF hasil ekstraksi cerdas
+  // Cache teks halaman PDF hasil ekstraksi cerdas
   const [pdfTextCache, setPdfTextCache] = useState<
     Record<
       number,
       {
         detectedChapterTitle?: string;
         isRealChapterOpening: boolean;
-        elements: PageContentElement[];
+        paragraphs: string[];
         isImageOnly?: boolean;
       }
     >
@@ -1014,15 +782,15 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
         }
         if (currentLine.trim()) lines.push(currentLine.trim());
 
-        const formatted = cleanAndFormatPdfLines(lines, book?.title);
+        const formatted = cleanAndFormatPdfLines(lines);
 
         setPdfTextCache((prev) => ({
           ...prev,
           [pageNum]: {
             detectedChapterTitle: formatted.detectedChapterTitle,
             isRealChapterOpening: formatted.isRealChapterOpening,
-            elements: formatted.elements,
-            isImageOnly: formatted.elements.length === 0,
+            paragraphs: formatted.paragraphs,
+            isImageOnly: formatted.paragraphs.length === 0,
           },
         }));
       } catch (err) {
@@ -1031,7 +799,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
         setIsExtractingCurrentPage(false);
       }
     },
-    [pdfDocInstance, pdfTextCache, book?.title]
+    [pdfDocInstance, pdfTextCache]
   );
 
   // Otomatis ekstrak halaman saat ini dan pre-fetch halaman berikutnya agar navigasi mulus
@@ -1079,6 +847,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
   const [tocSearchQuery, setTocSearchQuery] = useState('');
   const [sliderJumpValue, setSliderJumpValue] = useState<number>(displayPageNumber);
 
+  // Sinkronkan nilai slider jump setiap kali halaman berpindah
   useEffect(() => {
     setSliderJumpValue(displayPageNumber);
   }, [displayPageNumber]);
@@ -1262,6 +1031,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
 
   // Data Bab dan Teks Halaman
   const currentTextPage = textPages[currentPageIndex] || textPages[0];
+
   const currentPdfData = isPdfBook ? pdfTextCache[displayPageNumber] : null;
 
   // Cek apakah halaman ini adalah PEMBUKA BAB ASLI (bukan halaman tengah)
@@ -1280,9 +1050,10 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
     return currentTextPage.chapterTitle;
   }, [isPdfBook, currentPdfData, currentTextPage]);
 
-  // Keterangan Sisa Halaman di Header Atas
+  // Keterangan Sisa Halaman di Header Atas (Persis: "Tersisa 3 halaman di bab ini")
   const headerSubtitle = useMemo(() => {
     if (isPdfBook) {
+      // Cari bab aktif dari daftar outline PDF
       const currentToc = pdfOutlineItems
         .filter((item) => item.pageNumber <= displayPageNumber)
         .pop();
@@ -1318,26 +1089,15 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
     chapterEndPages,
   ]);
 
-  // Elemen-elemen konten halaman saat ini
-  const currentPageElements: PageContentElement[] = useMemo(() => {
+  // Paragraf-paragraf isi halaman saat ini
+  const currentPageParagraphs = useMemo(() => {
     if (isPdfBook) {
-      if (currentPdfData && currentPdfData.elements.length > 0) {
-        return currentPdfData.elements;
+      if (currentPdfData && currentPdfData.paragraphs.length > 0) {
+        return currentPdfData.paragraphs;
       }
-      return [];
+      return null;
     }
-
-    // Untuk buku teks non-PDF
-    return currentTextPage.paragraphs.map((p) => {
-      if (p.startsWith('[GAMBAR_HALAMAN:') && p.endsWith(']')) {
-        return { type: 'image', uri: p.slice(16, -1) };
-      }
-      const listMatch = p.match(/^(\d+[\.\)]|[a-zA-Z][\.\)]|[-•*])\s+(.+)$/);
-      if (listMatch) {
-        return { type: 'list-item', marker: listMatch[1], text: listMatch[2] };
-      }
-      return { type: 'paragraph', text: p };
-    });
+    return currentTextPage.paragraphs;
   }, [isPdfBook, currentPdfData, currentTextPage]);
 
   const isPdfPageImageOnly =
@@ -1349,6 +1109,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
       return pdfOutlineItems;
     }
 
+    // Buat daftar bab terstruktur per 8-10 halaman jika PDF tanpa outline
     const chunkSize = Math.max(5, Math.ceil(totalPages / 10));
     const sections: TocItem[] = [];
     const count = Math.ceil(totalPages / chunkSize);
@@ -1373,6 +1134,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
     return sections;
   }, [pdfOutlineItems, totalPages]);
 
+  // Filter pencarian pada daftar isi
   const filteredSections = useMemo(() => {
     if (!tocSearchQuery.trim()) return organizedSections;
     const q = tocSearchQuery.toLowerCase();
@@ -1450,7 +1212,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
           )}
         </View>
 
-        {/* Tengah: Keterangan Sisa Halaman di Bab Ini */}
+        {/* Tengah: Keterangan Sisa Halaman di Bab Ini (Persis seperti gambar) */}
         <View style={styles.headerCenter}>
           <Text
             style={[
@@ -1731,7 +1493,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
             styles.ebookPaperPage,
             {
               backgroundColor: themePalette.paper,
-              maxWidth: isMobile ? '100%' : 720,
+              maxWidth: isMobile ? '100%' : 700,
               opacity: turnDirection ? 0.85 : 1,
               transform: [
                 {
@@ -1768,7 +1530,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
                 Membuka lembaran buku digital...
               </Text>
             </View>
-          ) : isPdfBook && isExtractingCurrentPage && currentPageElements.length === 0 ? (
+          ) : isPdfBook && isExtractingCurrentPage && !currentPageParagraphs ? (
             <View style={styles.centerLoadingState}>
               <ActivityIndicator size="small" color={themePalette.gold} />
               <Text
@@ -1792,18 +1554,20 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
             />
           ) : (
             /* ======================================================== */
-            /* TAMPILAN BUKU DIGITAL UTAMA: TEKS TERTATA DAN RAPI        */
+            /* TAMPILAN BUKU DIGITAL UTAMA: TEKS MENGALIR DAN LENGKAP    */
             /* ======================================================== */
             <ScrollView
               ref={scrollViewRef}
               style={styles.bookTextScrollView}
               contentContainerStyle={[
                 styles.bookTextScrollContent,
-                { paddingHorizontal: isMobile ? 18 : 36 },
+                { paddingHorizontal: isMobile ? 20 : 36 },
               ]}
               showsVerticalScrollIndicator={true}
             >
-              {/* Judul Bab & Ornamen Pembatas Klasik (Hanya jika pembuka bab asli) */}
+              {/* Judul Bab & Ornamen Pembatas Klasik
+                  HANYA muncul jika halaman ini benar-benar merupakan Pembuka Bab Baru!
+                  Tidak muncul pada halaman lanjutan agar teks tidak terpotong atau membingungkan. */}
               {isRealChapterOpening && chapterOpeningTitle ? (
                 <View style={styles.ebookChapterHeaderBlock}>
                   <Text
@@ -1825,133 +1589,19 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
                 </View>
               ) : null}
 
-              {/* Konten Halaman: Menyesuaikan Elemen (Daftar Isi, List Poin, Heading, Prosa) */}
+              {/* Paragraf-paragraf Buku Berformat Novel Nyaman */}
               <View style={styles.ebookParagraphsContainer}>
-                {currentPageElements && currentPageElements.length > 0 ? (
-                  currentPageElements.map((elem, idx) => {
-                    // 1. ELEMEN BARIS DAFTAR ISI BERTITIK-TITIK RAPI
-                    if (elem.type === 'toc-item') {
+                {currentPageParagraphs && currentPageParagraphs.length > 0 ? (
+                  currentPageParagraphs.map((paragraph, pIdx) => {
+                    if (
+                      paragraph.startsWith('[GAMBAR_HALAMAN:') &&
+                      paragraph.endsWith(']')
+                    ) {
+                      const imgUri = paragraph.slice(16, -1);
                       return (
-                        <TouchableOpacity
-                          key={idx}
-                          onPress={() => {
-                            const parsedNum = parseInt(elem.pageNumber, 10);
-                            if (
-                              !isNaN(parsedNum) &&
-                              parsedNum >= 1 &&
-                              parsedNum <= totalPages
-                            ) {
-                              jumpToPage(parsedNum - 1);
-                            }
-                          }}
-                          activeOpacity={0.7}
-                          style={[
-                            styles.bookTocRow,
-                            {
-                              paddingLeft:
-                                elem.level === 3
-                                  ? 34
-                                  : elem.level === 2
-                                  ? 22
-                                  : elem.level === 1
-                                  ? 12
-                                  : 4,
-                            },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.bookTocTitle,
-                              {
-                                color: themePalette.text,
-                                fontWeight: elem.level === 0 ? '700' : '400',
-                                fontSize: elem.level === 0 ? fontSize : fontSize - 0.5,
-                              },
-                            ]}
-                          >
-                            {elem.title}
-                          </Text>
-                          <View
-                            style={[
-                              styles.bookTocLeaderLine,
-                              { borderColor: themePalette.border },
-                            ]}
-                          />
-                          <Text
-                            style={[
-                              styles.bookTocPageNumber,
-                              {
-                                color:
-                                  elem.level === 0
-                                    ? themePalette.gold
-                                    : themePalette.muted,
-                                fontSize: fontSize - 0.5,
-                              },
-                            ]}
-                          >
-                            {elem.pageNumber}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    }
-
-                    // 2. ELEMEN BUTIR DAFTAR NOMOR / POIN
-                    if (elem.type === 'list-item') {
-                      return (
-                        <View key={idx} style={styles.bookListItemRow}>
-                          <Text
-                            style={[
-                              styles.bookListItemMarker,
-                              { color: themePalette.gold, fontSize },
-                            ]}
-                          >
-                            {elem.marker}
-                          </Text>
-                          <Text
-                            style={[
-                              styles.bookListItemText,
-                              {
-                                color: themePalette.text,
-                                fontSize,
-                                lineHeight: Math.round(fontSize * 1.82),
-                              },
-                            ]}
-                          >
-                            {elem.text}
-                          </Text>
-                        </View>
-                      );
-                    }
-
-                    // 3. ELEMEN SUB-JUDUL BAGIAN
-                    if (elem.type === 'heading') {
-                      if (isStandalonePageNumber(elem.text) || !/[a-zA-Z]/.test(elem.text)) {
-                        return null;
-                      }
-                      return (
-                        <Text
-                          key={idx}
-                          style={[
-                            styles.bookSectionHeading,
-                            {
-                              color: themePalette.accent,
-                              fontSize: fontSize + 2.5,
-                              marginTop: 18,
-                              marginBottom: 10,
-                            },
-                          ]}
-                        >
-                          {elem.text}
-                        </Text>
-                      );
-                    }
-
-                    // 4. ELEMEN GAMBAR ILUSTRASI
-                    if (elem.type === 'image') {
-                      return (
-                        <View key={idx} style={styles.inlinePageImageWrap}>
+                        <View key={pIdx} style={styles.inlinePageImageWrap}>
                           <Image
-                            source={{ uri: elem.uri }}
+                            source={{ uri: imgUri }}
                             style={styles.inlinePageImage}
                             resizeMode="contain"
                           />
@@ -1959,14 +1609,9 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
                       );
                     }
 
-                    // 5. ELEMEN PARAGRAF PROSA STANDAR
-                    if (isStandalonePageNumber(elem.text)) {
-                      return null;
-                    }
-
                     return (
                       <p
-                        key={idx}
+                        key={pIdx}
                         style={{
                           fontFamily:
                             'Literata, Georgia, "Palatino Linotype", "Book Antiqua", Palatino, serif',
@@ -1975,14 +1620,14 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
                           color: themePalette.text,
                           margin: '0 0 18px 0',
                           textIndent:
-                            idx > 0 && elem.text.length > 70 ? '24px' : '0px',
+                            pIdx > 0 && paragraph.length > 70 ? '24px' : '0px',
                           textAlign: isMobile ? 'left' : 'justify',
                           letterSpacing: '0.012em',
                           wordBreak: 'break-word',
                           hyphens: 'auto',
                         }}
                       >
-                        {elem.text}
+                        {paragraph}
                       </p>
                     );
                   })
@@ -1997,7 +1642,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
                   </Text>
                 )}
 
-                {/* Indikator Akhir Halaman */}
+                {/* Indikator Akhir Halaman: Memastikan pengguna tahu bacaan halaman ini sudah selesai utuh */}
                 <View style={styles.pageEndIndicatorWrap}>
                   <View
                     style={[
@@ -2011,7 +1656,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
                       { color: themePalette.muted },
                     ]}
                   >
-                    — • —
+                    — Akhir Halaman {displayPageNumber} dari {totalPages} —
                   </Text>
                   {displayPageNumber < totalPages ? (
                     <TouchableOpacity
@@ -2345,6 +1990,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
             {/* TAB 1: DAFTAR BAB RAPI */}
             {tocActiveTab === 'chapters' ? (
               <View style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                {/* Kolom Pencarian Bab */}
                 {organizedSections.length > 5 ? (
                   <div style={{ padding: '8px 0 10px 0' }}>
                     <input
@@ -2512,7 +2158,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
                   />
                 </div>
 
-                {/* Tombol Pintas Halaman */}
+                {/* Tombol Pintas Halaman (Awal, Seperempat, Tengah, Akhir) */}
                 <View style={styles.jumpShortcutsRow}>
                   {[
                     { label: 'Awal (Hal 1)', page: 1 },
@@ -2874,12 +2520,12 @@ const styles = StyleSheet.create({
   bookTextScrollContent: {
     paddingTop: 16,
     paddingBottom: 130, // Ruang lega agar baris paling bawah tidak tertutup footer
-    maxWidth: 720,
+    maxWidth: 680,
     alignSelf: 'center',
     width: '100%',
   },
 
-  /* CHAPTER HEADER BLOCK */
+  /* CHAPTER HEADER BLOCK (Hanya muncul jika halaman pembuka bab) */
   ebookChapterHeaderBlock: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -2904,66 +2550,6 @@ const styles = StyleSheet.create({
   ebookParagraphsContainer: {
     width: '100%',
   },
-
-  /* ELEMEN BARIS DAFTAR ISI (TOC ROW) RAPI */
-  bookTocRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    paddingVertical: 7,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    marginVertical: 1,
-  },
-  bookTocTitle: {
-    fontFamily: 'Literata, Georgia, "Palatino Linotype", Palatino, serif' as any,
-    letterSpacing: 0.1,
-    flexShrink: 1,
-    lineHeight: 22,
-  },
-  bookTocLeaderLine: {
-    flex: 1,
-    borderBottomWidth: 1.5,
-    borderStyle: 'dotted' as any,
-    marginHorizontal: 8,
-    marginBottom: 4,
-    opacity: 0.45,
-  },
-  bookTocPageNumber: {
-    fontFamily: 'Manrope, sans-serif' as any,
-    fontWeight: '700',
-    marginLeft: 4,
-    minWidth: 24,
-    textAlign: 'right',
-  },
-
-  /* ELEMEN BUTIR LIST NOMOR / POIN */
-  bookListItemRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginVertical: 4,
-    paddingLeft: 6,
-    width: '100%',
-  },
-  bookListItemMarker: {
-    width: 30,
-    fontWeight: '700',
-    fontFamily: 'Manrope, sans-serif' as any,
-    paddingTop: 1,
-  },
-  bookListItemText: {
-    flex: 1,
-    fontFamily: 'Literata, Georgia, serif' as any,
-    letterSpacing: 0.01,
-  },
-
-  /* ELEMEN SUB-JUDUL BAGIAN */
-  bookSectionHeading: {
-    fontFamily: 'Literata, Georgia, serif' as any,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
-
   emptyPageText: {
     fontFamily: 'Literata, Georgia, serif' as any,
     fontStyle: 'italic',

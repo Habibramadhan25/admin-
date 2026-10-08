@@ -46,16 +46,16 @@ export const CollectionScreen: React.FC<CollectionScreenProps> = ({
   const filteredBooks = books.filter((b) => {
     const matchesSearch = searchQuery
       ? b.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        b.author.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        b.category.toLowerCase().includes(searchQuery.toLowerCase())
+      b.author.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      b.category.toLowerCase().includes(searchQuery.toLowerCase())
       : true;
 
     const matchesFilter =
       selectedFilter === 'Semua'
         ? true
         : b.category.toLowerCase().includes(selectedFilter.toLowerCase()) ||
-          (selectedFilter === 'Pengembangan Diri' &&
-            b.category.toLowerCase().includes('self'));
+        (selectedFilter === 'Pengembangan Diri' &&
+          b.category.toLowerCase().includes('self'));
 
     return matchesSearch && matchesFilter;
   });

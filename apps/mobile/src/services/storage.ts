@@ -101,7 +101,7 @@ export const UserStorage = {
           `${STORAGE_PREFIX}${userId}_history`,
           JSON.stringify(history)
         );
-      } catch (err) {}
+      } catch (err) { }
     }
   },
 
@@ -131,7 +131,7 @@ export const UserStorage = {
         } else {
           localStorage.removeItem('bacayuk_active_session_user');
         }
-      } catch {}
+      } catch { }
     }
   },
 

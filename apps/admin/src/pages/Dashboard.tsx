@@ -1,20 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { 
-  BookOpen, 
-  Users, 
-  Tags, 
-  BookCheck, 
+import {
+  BookOpen,
+  Users,
+  Tags,
+  BookCheck,
   Star,
   TrendingUp,
   Activity
 } from 'lucide-react';
-import { 
-  AreaChart, 
-  Area, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
   ResponsiveContainer,
   BarChart,
   Bar,
@@ -122,24 +122,24 @@ const Dashboard = () => {
               <AreaChart data={dataReads} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#8a6d1c" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#8a6d1c" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="#8a6d1c" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#8a6d1c" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#d4c3a3" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#8a6d1c', fontWeight: 'bold' }} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: '#8a6d1c', fontWeight: 'bold' }} />
-                <Tooltip 
+                <Tooltip
                   contentStyle={{ borderRadius: '8px', border: '1px solid #d4c3a3', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', backgroundColor: '#f9f6f0', color: '#3a2012', fontWeight: 'bold' }}
                   cursor={{ stroke: '#8a6d1c', strokeWidth: 1, strokeDasharray: '3 3' }}
                 />
-                <Area 
-                  type="monotone" 
-                  dataKey="total" 
-                  stroke="#8a6d1c" 
+                <Area
+                  type="monotone"
+                  dataKey="total"
+                  stroke="#8a6d1c"
                   strokeWidth={3}
-                  fillOpacity={1} 
-                  fill="url(#colorTotal)" 
+                  fillOpacity={1}
+                  fill="url(#colorTotal)"
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -158,7 +158,7 @@ const Dashboard = () => {
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#d4c3a3" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#8a6d1c', fontWeight: 'bold' }} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: '#8a6d1c', fontWeight: 'bold' }} />
-                <Tooltip 
+                <Tooltip
                   contentStyle={{ borderRadius: '8px', border: '1px solid #d4c3a3', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', backgroundColor: '#f9f6f0', color: '#3a2012', fontWeight: 'bold' }}
                   cursor={{ fill: '#ebdcb8' }}
                 />
