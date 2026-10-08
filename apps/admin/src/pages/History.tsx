@@ -1,14 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { HistoryItem } from '../lib/mockData';
 import { History as HistoryIcon, BookOpen } from 'lucide-react';
 
 const History = () => {
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-
-  useEffect(() => {
-    const data = JSON.parse(localStorage.getItem('bacayuk_history') || '[]');
-    setHistory(data);
-  }, []);
+  const [history] = useState<HistoryItem[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('bacayuk_history') || '[]');
+    } catch {
+      return [];
+    }
+  });
 
   const [selectedHistory, setSelectedHistory] = useState<HistoryItem | null>(null);
 

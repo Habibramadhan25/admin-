@@ -17,8 +17,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   BarChart,
-  Bar,
-  Legend
+  Bar
 } from 'recharts';
 import { initLocalStorage, Book, User, Category } from '../lib/mockData';
 
@@ -41,29 +40,44 @@ const dataCategories = [
 ];
 
 const Dashboard = () => {
-  const [stats, setStats] = useState({
-    books: 0,
-    users: 0,
-    categories: 0,
-    reads: 0,
-    completed: 0,
-    ratings: 0
-  });
-
-  useEffect(() => {
+  const [stats, setStats] = useState(() => {
     initLocalStorage();
     const books: Book[] = JSON.parse(localStorage.getItem('bacayuk_books') || '[]');
     const users: User[] = JSON.parse(localStorage.getItem('bacayuk_users') || '[]');
     const categories: Category[] = JSON.parse(localStorage.getItem('bacayuk_categories') || '[]');
 
-    setStats({
+    return {
       books: books.length,
       users: users.length,
       categories: categories.length,
       reads: books.reduce((acc, curr) => acc + curr.readers, 0),
       completed: users.reduce((acc, curr) => acc + curr.booksCompleted, 0),
-      ratings: 12543 // Mock data for total ratings
-    });
+      ratings: 12543
+    };
+  });
+
+  useEffect(() => {
+    const refreshStats = () => {
+      const books: Book[] = JSON.parse(localStorage.getItem('bacayuk_books') || '[]');
+      const users: User[] = JSON.parse(localStorage.getItem('bacayuk_users') || '[]');
+      const categories: Category[] = JSON.parse(localStorage.getItem('bacayuk_categories') || '[]');
+
+      setStats({
+        books: books.length,
+        users: users.length,
+        categories: categories.length,
+        reads: books.reduce((acc, curr) => acc + curr.readers, 0),
+        completed: users.reduce((acc, curr) => acc + curr.booksCompleted, 0),
+        ratings: 12543
+      });
+    };
+
+    window.addEventListener('storage', refreshStats);
+    window.addEventListener('bacayuk_books_updated', refreshStats);
+    return () => {
+      window.removeEventListener('storage', refreshStats);
+      window.removeEventListener('bacayuk_books_updated', refreshStats);
+    };
   }, []);
 
   const statCards = [

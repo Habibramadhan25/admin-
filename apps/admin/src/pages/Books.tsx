@@ -105,7 +105,14 @@ const AdminPdfPageCanvas: React.FC<{
 };
 
 const Books = () => {
-  const [books, setBooks] = useState<Book[]>([]);
+  const [books, setBooks] = useState<Book[]>(() => {
+    try {
+      const saved = localStorage.getItem('bacayuk_books');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const navigate = useNavigate();
 
@@ -126,10 +133,18 @@ const Books = () => {
   const itemsPerPage = 5;
 
   useEffect(() => {
-    const saved = localStorage.getItem('bacayuk_books');
-    if (saved) {
-      setBooks(JSON.parse(saved));
-    }
+    const handleUpdate = () => {
+      try {
+        const saved = localStorage.getItem('bacayuk_books');
+        if (saved) setBooks(JSON.parse(saved));
+      } catch {}
+    };
+    window.addEventListener('bacayuk_books_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    return () => {
+      window.removeEventListener('bacayuk_books_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+    };
   }, []);
 
   const confirmDelete = (id: string) => {

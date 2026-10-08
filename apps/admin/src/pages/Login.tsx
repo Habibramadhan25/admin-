@@ -7,11 +7,8 @@ import {
   EyeOff,
   Loader2,
   BookOpen,
-  Bookmark,
-  Award,
   Sparkles,
   ArrowRight,
-  CheckCircle2,
 } from 'lucide-react';
 
 const Login: React.FC = () => {

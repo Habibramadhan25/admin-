@@ -19,7 +19,7 @@ function parseTextIntoChapters(text: string, defaultTitle: string): BookChapter[
 
   // Pola pembagian bab seperti "Bab 1", "BAB I", "Chapter 1", dll.
   const chapterRegex =
-    /(?:\n|^)(?:(?:BAB|Bab|CHAPTER|Chapter|BAGIAN|Bagian)\s+[\dIVXLCDMivxlcdm]+[^\n]*|\#\#?\s+[^\n]+)/g;
+    /(?:\n|^)(?:(?:BAB|Bab|CHAPTER|Chapter|BAGIAN|Bagian)\s+[\dIVXLCDMivxlcdm]+[^\n]*|##?\s+[^\n]+)/g;
   const matches = [...clean.matchAll(chapterRegex)];
 
   if (matches.length >= 2) {

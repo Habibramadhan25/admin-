@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { 
-  BookOpen, 
   LayoutDashboard, 
   BookCopy, 
   PlusCircle, 
@@ -20,8 +19,8 @@ import {
 
 const AdminLayout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [avatar, setAvatar] = useState(localStorage.getItem('bacayuk_admin_avatar') || '');
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const [avatar, setAvatar] = useState(() => localStorage.getItem('bacayuk_admin_avatar') || '');
+  const [currentTime, setCurrentTime] = useState(() => new Date());
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const navigate = useNavigate();
