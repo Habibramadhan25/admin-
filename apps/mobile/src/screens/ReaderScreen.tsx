@@ -91,12 +91,38 @@ function cleanAndFormatPdfLines(rawLines: string[]): {
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
+  // Cek apakah halaman ini adalah halaman Daftar Isi (TOC)
+  const isPageLikelyToc = cleanLines.some(
+    (l, idx) =>
+      (idx < 5 &&
+        /^(daftar\s+isi|table\s+of\s+contents|contents)$/i.test(
+          l.replace(/[^a-zA-Z\s]/g, '').trim()
+        )) ||
+      /\.{3,}|\.\s*\.\s*\./.test(l) ||
+      /(?:\.{2,}|\s{4,})\d{1,4}$/.test(l)
+  );
+
+  // Preprocessing HANYA untuk halaman daftar isi (jika ada dua entri menempel dalam satu baris)
+  const preprocessed: string[] = [];
+  for (const raw of cleanLines) {
+    if (isPageLikelyToc && /\.{2,}/.test(raw)) {
+      const parts = raw.split(
+        /(?<=(?:\.{2,}|\s)\d{1,4})\s+(?=(?:[A-Z\d]+[\.\)]|BAB|BAGIAN|PART|CHAPTER)\s+)/i
+      );
+      for (const p of parts) {
+        if (p.trim()) preprocessed.push(p.trim());
+      }
+    } else {
+      preprocessed.push(raw);
+    }
+  }
+
   let detectedChapterTitle: string | undefined;
   let isRealChapterOpening = false;
   const filteredLines: string[] = [];
 
-  for (let i = 0; i < cleanLines.length; i++) {
-    const line = cleanLines[i];
+  for (let i = 0; i < preprocessed.length; i++) {
+    const line = preprocessed[i];
 
     // Deteksi judul bab HANYA jika benar-benar merupakan judul pembuka bab baru
     // (Misal: "BAB I", "BAB 2", "CHAPTER 37", "KATA PENGANTAR", "DAFTAR ISI")
@@ -114,19 +140,75 @@ function cleanAndFormatPdfLines(rawLines: string[]): {
     }
 
     // Abaikan nomor halaman terisolasi di header atau footer (misal angka "1" atau "83" sendirian)
-    if (/^\d{1,4}$/.test(line) && (i === 0 || i === cleanLines.length - 1)) {
+    if (/^\d{1,4}$/.test(line) && (i === 0 || i === preprocessed.length - 1)) {
       continue;
     }
 
     filteredLines.push(line);
   }
 
-  // Gabungkan baris-baris teks menjadi paragraf utuh yang mengalir
+  // 1. JIKA HALAMAN DAFTAR ISI: Pertahankan setiap baris entri bab secara terpisah agar tidak acak-acakan!
+  if (isPageLikelyToc) {
+    const paragraphs: string[] = [];
+    let pendingTitle = '';
+
+    for (let i = 0; i < filteredLines.length; i++) {
+      const line = filteredLines[i];
+      const nextLine = filteredLines[i + 1];
+
+      // Cek apakah baris ini memuat titik-titik atau berakhiran nomor halaman
+      const hasPageNumber = /(?:\.{2,}|\s{2,}|\s+)(\d{1,4}|[ivxlcdm]+)$/i.test(line);
+      const hasDots = /\.{2,}|\.\s*\.\s*\./.test(line);
+
+      if (pendingTitle) {
+        const combined = `${pendingTitle} ${line}`;
+        pendingTitle = '';
+        if (hasPageNumber || hasDots || !nextLine) {
+          paragraphs.push(combined.trim());
+        } else {
+          pendingTitle = combined;
+        }
+        continue;
+      }
+
+      // Jika baris judul panjang terpotong 2 baris (baris 1 belum ada nomor halaman, baris 2 ada kelanjutan + nomor halaman)
+      const nextHasPageNumber =
+        nextLine && /(?:\.{2,}|\s{2,}|\s+)(\d{1,4}|[ivxlcdm]+)$/i.test(nextLine);
+      const nextStartsLabel =
+        nextLine && /^([A-Z\d]+[\.\)]|BAB|BAGIAN|PART|CHAPTER)\s+/i.test(nextLine);
+
+      if (!hasPageNumber && !hasDots && nextLine && nextHasPageNumber && !nextStartsLabel) {
+        pendingTitle = line;
+        continue;
+      }
+
+      paragraphs.push(line);
+    }
+
+    if (pendingTitle.trim()) {
+      paragraphs.push(pendingTitle.trim());
+    }
+
+    return {
+      detectedChapterTitle,
+      isRealChapterOpening,
+      paragraphs,
+    };
+  }
+
+  // 2. UNTUK HALAMAN ISI MATERI BUKU BIASA:
+  // Jamin teks poin 1, 2, 3 mengalir tuntas dan tidak terpotong!
   const paragraphs: string[] = [];
   let currentParagraph = '';
 
   for (let i = 0; i < filteredLines.length; i++) {
     const line = filteredLines[i];
+    const nextLine = filteredLines[i + 1];
+
+    // Cek apakah baris berikutnya adalah permulaan poin bernomor baru (misal: "2. ", "3. ", "B. ")
+    const nextStartsNewNumberedPoint =
+      nextLine &&
+      /^(\d+[\.\)]|[A-Z][\.\)]|(?:bab|bagian|chapter)\s+[\dIVXLCDM]+)\s+/i.test(nextLine);
 
     // Tangani tanda hubung pemisah kata di akhir baris (misal: "per-\njalanan" -> "perjalanan")
     if (currentParagraph.endsWith('-')) {
@@ -137,15 +219,16 @@ function cleanAndFormatPdfLines(rawLines: string[]): {
       currentParagraph = line;
     }
 
-    // Paragraf berakhir jika ada tanda baca terminal (. ! ? : " ”) dan baris berikutnya baris baru/kapital
     const endsWithTerminal = /[.!?:"”]\s*$/.test(line);
-    const nextLine = filteredLines[i + 1];
     const isNextIndentedOrCapital =
       nextLine && /^[A-Z"“0-9(]/.test(nextLine) && line.length < 58;
 
+    // Paragraf berakhir HANYA jika:
+    // a. Kalimat sudah berakhiran tanda baca terminal (. ! ?) DAN baris berikutnya adalah poin nomor baru (seperti "2. ")
+    // b. Atau ada tanda terminal dan baris berikutnya berjarak alinea
+    // c. Atau sudah baris terakhir di halaman
     if (
-      endsWithTerminal ||
-      isNextIndentedOrCapital ||
+      (endsWithTerminal && (nextStartsNewNumberedPoint || isNextIndentedOrCapital)) ||
       i === filteredLines.length - 1
     ) {
       if (currentParagraph.trim().length > 0) {
@@ -762,14 +845,31 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
         const page = await pdfDocInstance.getPage(pageNum);
         const textContent = await page.getTextContent();
 
+        const rawItems = (textContent.items || []).filter(
+          (it: any) => it && typeof it.str === 'string' && it.transform
+        );
+
+        // Urutkan item teks sesuai alur membaca visual yang benar:
+        // Dari atas ke bawah (Y besar ke kecil), lalu dari kiri ke kanan (X kecil ke besar)
+        rawItems.sort((a: any, b: any) => {
+          const yA = a.transform[5];
+          const yB = b.transform[5];
+          if (Math.abs(yA - yB) > 4) {
+            return yB - yA; // Posisi Y atas muncul lebih dulu
+          }
+          const xA = a.transform[4];
+          const xB = b.transform[4];
+          return xA - xB; // Posisi X kiri muncul lebih dulu
+        });
+
         const lines: string[] = [];
         let currentLine = '';
         let lastY: number | null = null;
 
-        for (const item of textContent.items) {
+        for (const item of rawItems) {
           if (!item.str) continue;
           const y = item.transform ? Math.round(item.transform[5]) : null;
-          if (lastY !== null && y !== null && Math.abs(y - lastY) > 8) {
+          if (lastY !== null && y !== null && Math.abs(y - lastY) > 5) {
             if (currentLine.trim()) lines.push(currentLine.trim());
             currentLine = item.str;
           } else {
@@ -841,6 +941,7 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
     isDark ? 'dark' : 'white'
   );
   const [fontSize, setFontSize] = useState<number>(isMobile ? 16.5 : 18);
+  const [textAlignMode, setTextAlignMode] = useState<'left' | 'justify'>('left');
   const [showSettings, setShowSettings] = useState(false);
   const [showTocModal, setShowTocModal] = useState(false);
   const [tocActiveTab, setTocActiveTab] = useState<'chapters' | 'jump' | 'bookmarks'>('chapters');
@@ -1387,6 +1488,82 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
             </View>
           </View>
 
+          {/* Pilihan Perataan Teks (Rata Kiri vs Justify) */}
+          <View style={styles.settingsRow}>
+            <Text
+              style={[styles.settingsRowLabel, { color: themePalette.text }]}
+            >
+              Perataan Teks
+            </Text>
+            <View style={styles.alignToggleWrap}>
+              <TouchableOpacity
+                onPress={() => setTextAlignMode('left')}
+                style={[
+                  styles.alignToggleBtn,
+                  textAlignMode === 'left' && [
+                    styles.alignToggleBtnActive,
+                    { backgroundColor: themePalette.gold },
+                  ],
+                  { borderColor: themePalette.border },
+                ]}
+                accessibilityLabel="Rata Kiri"
+              >
+                <MaterialIcon
+                  name="format_align_left"
+                  size={14}
+                  color={textAlignMode === 'left' ? '#ffffff' : themePalette.text}
+                />
+                <Text
+                  style={[
+                    styles.alignToggleText,
+                    {
+                      color:
+                        textAlignMode === 'left'
+                          ? '#ffffff'
+                          : themePalette.text,
+                    },
+                  ]}
+                >
+                  Rata Kiri
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => setTextAlignMode('justify')}
+                style={[
+                  styles.alignToggleBtn,
+                  textAlignMode === 'justify' && [
+                    styles.alignToggleBtnActive,
+                    { backgroundColor: themePalette.gold },
+                  ],
+                  { borderColor: themePalette.border },
+                ]}
+                accessibilityLabel="Rata Kanan-Kiri"
+              >
+                <MaterialIcon
+                  name="format_align_justify"
+                  size={14}
+                  color={
+                    textAlignMode === 'justify' ? '#ffffff' : themePalette.text
+                  }
+                />
+                <Text
+                  style={[
+                    styles.alignToggleText,
+                    {
+                      color:
+                        textAlignMode === 'justify'
+                          ? '#ffffff'
+                          : themePalette.text,
+                    },
+                  ]}
+                >
+                  Justify
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
           {/* Opsi Switch Mode Visual PDF vs E-Reader Reflow */}
           {isPdfBook && pdfDocInstance ? (
             <View
@@ -1609,6 +1786,91 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
                       );
                     }
 
+                    // Hanya kenali sebagai item daftar isi visual jika mengandung titik-titik pemimpin (dot leaders) nyata
+                    const hasDottedLeader =
+                      /\.{3,}|\.\s*\.\s*\./.test(paragraph) &&
+                      /(?:\.{2,}|\s{2,})\s*(\d{1,4}|[ivxlcdm]+)$/i.test(paragraph.trim());
+
+                    const tocMatch = hasDottedLeader
+                      ? paragraph.match(
+                          /^(.*?)(?:\.{2,}|\.\s*\.\s*\.|\s{2,})\s*(\d{1,4}|[ivxlcdm]+)$/i
+                        )
+                      : null;
+
+                    if (tocMatch) {
+                      const itemTitle = tocMatch[1].trim();
+                      const itemPage = tocMatch[2].trim();
+                      const targetPage = parseInt(itemPage, 10);
+                      const canJump =
+                        !isNaN(targetPage) &&
+                        targetPage >= 1 &&
+                        targetPage <= totalPages;
+
+                      return (
+                        <div
+                          key={pIdx}
+                          onClick={
+                            canJump ? () => jumpToPage(targetPage - 1) : undefined
+                          }
+                          style={{
+                            display: 'flex',
+                            alignItems: 'baseline',
+                            justifyContent: 'space-between',
+                            width: '100%',
+                            margin: '0 0 10px 0',
+                            fontFamily:
+                              'Literata, Georgia, "Palatino Linotype", "Book Antiqua", Palatino, serif',
+                            fontSize: `${fontSize}px`,
+                            lineHeight: `${Math.round(fontSize * 1.6)}px`,
+                            color: themePalette.text,
+                            cursor: canJump ? 'pointer' : 'default',
+                            userSelect: 'text',
+                          }}
+                          title={
+                            canJump
+                              ? `Klik untuk lompat ke Halaman ${targetPage}`
+                              : undefined
+                          }
+                        >
+                          <span
+                            style={{
+                              textAlign: 'left',
+                              wordBreak: 'break-word',
+                              flexShrink: 1,
+                              paddingRight: 6,
+                              fontWeight: /^(bab|bagian|chapter)/i.test(itemTitle)
+                                ? 700
+                                : 400,
+                            }}
+                          >
+                            {itemTitle}
+                          </span>
+                          <span
+                            style={{
+                              flex: 1,
+                              borderBottom: `1.5px dotted ${themePalette.muted}`,
+                              margin: '0 8px 3px 8px',
+                              minWidth: 16,
+                              opacity: 0.45,
+                            }}
+                          />
+                          <span
+                            style={{
+                              flexShrink: 0,
+                              fontWeight: 600,
+                              fontVariantNumeric: 'tabular-nums',
+                              color: themePalette.gold,
+                              marginLeft: 'auto',
+                            }}
+                          >
+                            {itemPage}
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    const isLeftAligned = textAlignMode === 'left' || Boolean(tocMatch);
+
                     return (
                       <p
                         key={pIdx}
@@ -1618,13 +1880,15 @@ export const ReaderScreen: React.FC<ReaderScreenProps> = ({
                           fontSize: `${fontSize}px`,
                           lineHeight: `${Math.round(fontSize * 1.84)}px`,
                           color: themePalette.text,
-                          margin: '0 0 18px 0',
+                          margin: Boolean(tocMatch) ? '0 0 10px 0' : '0 0 18px 0',
                           textIndent:
-                            pIdx > 0 && paragraph.length > 70 ? '24px' : '0px',
-                          textAlign: isMobile ? 'left' : 'justify',
+                            !isLeftAligned && pIdx > 0 && paragraph.length > 70
+                              ? '24px'
+                              : '0px',
+                          textAlign: isLeftAligned ? 'left' : 'justify',
                           letterSpacing: '0.012em',
                           wordBreak: 'break-word',
-                          hyphens: 'auto',
+                          hyphens: isLeftAligned ? 'none' : 'auto',
                         }}
                       >
                         {paragraph}
@@ -2458,6 +2722,29 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope, sans-serif' as any,
     fontSize: 11,
     fontWeight: '700',
+  },
+  alignToggleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  alignToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  alignToggleBtnActive: {
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  alignToggleText: {
+    fontFamily: 'Manrope, sans-serif' as any,
+    fontSize: 11,
+    fontWeight: '600',
   },
 
   /* READING STAGE */
